@@ -6,7 +6,7 @@ const sb = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 const COLORS = ['#ff4d6d', '#4d9fff', '#50f0a0', '#f0c050', '#c8f050', '#7c6cff', '#ff9f50', '#f050c8', '#50c8f0', '#a0f050']
 let chosenColor = COLORS[0]
-let sessionId = null, quizId = null, playerId = null, playerToken = null, totalQs = 0
+let sessionId = null, quizId = null, playerId = null, totalQs = 0
 let huntStartTime = null, timerInt = null, channel = null
 let answeredQuestions = []
 let totalPausedMs = 0, isPaused = false
@@ -16,7 +16,7 @@ const savedHuntStart = localStorage.getItem('quiz_hunt_start')
 if (savedHuntStart) huntStartTime = parseInt(savedHuntStart)
 
 const savedIdentity = JSON.parse(localStorage.getItem('quiz_identity') || 'null')
-if (savedIdentity?.playerId && savedIdentity?.token) {
+if (savedIdentity?.playerId) {
   restoreSession(savedIdentity)
 } else {
   buildColorPicker()
@@ -40,7 +40,7 @@ function buildColorPicker() {
 }
 
 async function restoreSession(identity) {
-  sessionId = identity.sessionId; quizId = identity.quizId; playerId = identity.playerId; playerToken = identity.token
+  sessionId = identity.sessionId; quizId = identity.quizId; playerId = identity.playerId
   if (identity.totalQs) totalQs = identity.totalQs
   const { data: sess } = await sb.from('sessions').select('status,quizzes(name,question_count)').eq('id', sessionId).single()
   if (!sess) { localStorage.removeItem('quiz_identity'); buildColorPicker(); show('pin-screen'); return }
@@ -96,19 +96,10 @@ window.joinGame = async function () {
   if (/[<>"'`]/.test(nick)) return toast('Kallenamnet inneheld ugyldige teikn')
   // Berre farge frå den godkjende lista — hindrar CSS/style-injeksjon
   const color = COLORS.includes(chosenColor) ? chosenColor : COLORS[0]
-  // Per-spelar hemmelegheit — krevst av serveren for å svare/oppdatere (hindrar juks og sabotasje)
-  const token = crypto.randomUUID() + '-' + crypto.randomUUID()
-  const { data: p, error } = await sb.from('session_players').insert({ session_id: sessionId, nickname: nick, avatar_color: color, player_token: token }).select('id').single()
-  if (error) {
-    const m = error.message || ''
-    if (m.includes('session_full'))     return toast('Denne quizen er full (maks 100 elevar)')
-    if (m.includes('session_closed'))   return toast('Quizen er ikkje open for å bli med lenger')
-    if (m.includes('invalid_nickname')) return toast('Ugyldig kallenamn — prøv eit anna')
-    return toast('Kunne ikkje bli med: ' + m)
-  }
+  const { data: p, error } = await sb.from('session_players').insert({ session_id: sessionId, nickname: nick, avatar_color: color }).select('id').single()
+  if (error) return toast('Kunne ikkje bli med: ' + error.message)
   playerId = p.id
-  playerToken = token
-  localStorage.setItem('quiz_identity', JSON.stringify({ sessionId, quizId, playerId, token, nickname: nick, totalQs }))
+  localStorage.setItem('quiz_identity', JSON.stringify({ sessionId, quizId, playerId, nickname: nick, totalQs }))
   document.getElementById('wait-nick').textContent = nick
   const { data: sess } = await sb.from('sessions').select('status').eq('id', sessionId).single()
   if (sess?.status === 'active') {
@@ -161,7 +152,7 @@ async function startHunt(alreadyStarted) {
     huntStartTime = Date.now()
     totalPausedMs = 0; isPaused = false
     localStorage.setItem('quiz_hunt_start', String(huntStartTime))
-    await sb.rpc('mark_hunt_started', { p_player_id: playerId, p_token: playerToken })
+    await sb.from('session_players').update({ hunt_started_at: new Date().toISOString() }).eq('id', playerId)
   } else {
     const saved = localStorage.getItem('quiz_hunt_start')
     if (saved) {
@@ -230,8 +221,11 @@ function startHuntTimer() {
 
 // ── REFRESH ANSWERS ──
 async function refreshAnswers() {
-  // Eigne svar hentast via token-verifisert RPC (anon kan ikkje lese session_answers direkte)
-  const { data: answers } = await sb.rpc('get_my_answers', { p_player_id: playerId, p_token: playerToken })
+  const { data: answers } = await sb
+    .from('session_answers')
+    .select('question_id, selected_option, is_correct, points_earned, questions(question_text)')
+    .eq('player_id', playerId)
+    .eq('session_id', sessionId)
 
   const { data: player } = await sb.from('session_players').select('total_score').eq('id', playerId).single()
 
@@ -256,7 +250,7 @@ async function refreshAnswers() {
       list.innerHTML = answeredQuestions.map(a => `
         <div class="ans-row ${a.is_correct ? 'correct' : 'wrong'}">
           <span class="ans-icon">${a.is_correct ? '✅' : '❌'}</span>
-          <span class="ans-text">${esc(a.question_text || 'Spørsmål')}</span>
+          <span class="ans-text">${esc(a.questions?.question_text || 'Spørsmål')}</span>
           <span class="ans-pts">${a.is_correct ? '+' + a.points_earned : '0'}</span>
         </div>`).join('')
     }
@@ -271,8 +265,10 @@ async function refreshAnswers() {
 async function endHunt() {
   clearInterval(timerInt)
   if (channel) channel.unsubscribe()
-  await sb.rpc('mark_hunt_finished', { p_player_id: playerId, p_token: playerToken })
-  const { data: player } = await sb.from('session_players').select('total_score').eq('id', playerId).single()
+  const { data: player } = await sb.from('session_players').select('total_score, hunt_finished_at').eq('id', playerId).single()
+  if (player && !player.hunt_finished_at) {
+    await sb.from('session_players').update({ hunt_finished_at: new Date().toISOString() }).eq('id', playerId)
+  }
   const elapsed = huntStartTime ? Math.floor((Date.now() - huntStartTime - totalPausedMs) / 1000) : 0
   const m = Math.floor(elapsed / 60), s = elapsed % 60
   localStorage.removeItem('quiz_identity')
@@ -297,7 +293,7 @@ function toast(msg) {
 
 // ── NEW QUIZ (from done screen) ──
 window.newQuiz = function () {
-  sessionId = null; quizId = null; playerId = null; playerToken = null; huntStartTime = null
+  sessionId = null; quizId = null; playerId = null; huntStartTime = null
   document.body.classList.remove('hunt-active')
   show('pin-screen')
 }
@@ -308,7 +304,7 @@ function kickToPin() {
   if (channel) channel.unsubscribe()
   localStorage.removeItem('quiz_identity')
   localStorage.removeItem('quiz_hunt_start')
-  sessionId = null; quizId = null; playerId = null; playerToken = null; huntStartTime = null
+  sessionId = null; quizId = null; playerId = null; huntStartTime = null
   document.body.classList.remove('hunt-active')
   const t = document.createElement('div')
   t.className = 'toast'
@@ -324,10 +320,9 @@ function kickToPin() {
 // ── GO BACK TO PIN (from nickname screen) ──
 window.goBackToPin = async function () {
   if (playerId) {
-    await sb.rpc('delete_player', { p_player_id: playerId, p_token: playerToken })
+    await sb.from('session_players').delete().eq('id', playerId)
     if (channel) channel.send({ type: 'broadcast', event: 'player_left', payload: {} })
     playerId = null
-    playerToken = null
     localStorage.removeItem('quiz_identity')
   }
   show('pin-screen')
@@ -345,21 +340,15 @@ window.closeLeaveModal = function () {
 window.confirmLeave = async function () {
   document.getElementById('leave-modal').classList.remove('active')
   const pid = playerId
-  const tok = playerToken
   const sid = sessionId
-  const savedIdentity = JSON.parse(localStorage.getItem('quiz_identity') || 'null')
   clearInterval(timerInt)
   localStorage.removeItem('quiz_identity')
   localStorage.removeItem('quiz_hunt_start')
-  sessionId = null; quizId = null; playerId = null; playerToken = null; huntStartTime = null
+  sessionId = null; quizId = null; playerId = null; huntStartTime = null
   document.body.classList.remove('hunt-active')
   show('pin-screen')
   if (pid) {
-    localStorage.setItem('quiz_left_' + sid, JSON.stringify({
-      playerId: pid,
-      nickname: savedIdentity?.nickname || ''
-    }))
-    await sb.rpc('leave_session', { p_player_id: pid, p_token: tok })
+    await sb.from('session_players').update({ is_active: false }).eq('id', pid)
   }
   if (channel) { channel.unsubscribe(); channel = null }
 }
