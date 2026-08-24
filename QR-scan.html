@@ -297,9 +297,9 @@
         return
       }
 
-      // Check already answered
+      // Check already answered (token-verifisert RPC)
       const { data: myAnswers } = await db
-        .from('session_answers').select('question_id,is_correct').eq('player_id', identity.playerId).eq('session_id', identity.sessionId)
+        .rpc('get_my_answers', { p_player_id: identity.playerId, p_token: identity.token })
       const existing = (myAnswers || []).find(a => a.question_id === questionId) || null
 
       if (existing) {

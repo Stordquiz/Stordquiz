@@ -10,7 +10,7 @@ const questionId = new URLSearchParams(location.search).get('id')
 
 async function init() {
   if (!questionId)                               return showError('Ingen spørsmål-ID. Skann QR-koden på nytt.')
-  if (!identity?.playerId || !identity?.sessionId) return showNoSession()
+  if (!identity?.playerId || !identity?.sessionId || !identity?.token) return showNoSession()
 
   // Sjekk at sesjonen framleis finst og er aktiv
   const { data: sess } = await db.from('sessions').select('status,is_paused').eq('id', identity.sessionId).maybeSingle()
@@ -36,7 +36,7 @@ async function init() {
   if (error || !q) return showError('Fann ikkje spørsmålet. Er QR-koden riktig?')
 
   const [myAnswersRes, playerRes, allQsRes] = await Promise.all([
-    db.from('session_answers').select('question_id,selected_option,is_correct,points_earned').eq('player_id', identity.playerId).eq('session_id', identity.sessionId),
+    db.rpc('get_my_answers', { p_player_id: identity.playerId, p_token: identity.token }),
     db.from('session_players').select('total_score').eq('id', identity.playerId).single(),
     db.from('questions').select('id').eq('major_id', identity.quizId)
   ])
@@ -53,7 +53,7 @@ async function init() {
 
 // Hentar fasit via SECURITY DEFINER-RPC — fungerer berre om spelaren har svara
 async function fetchCorrectAnswers(qid) {
-  const { data } = await db.rpc('get_question_answer', { p_question_id: qid, p_player_id: identity.playerId })
+  const { data } = await db.rpc('get_question_answer', { p_question_id: qid, p_player_id: identity.playerId, p_token: identity.token })
   if (!data) return []
   try { const p = JSON.parse(data); return Array.isArray(p) ? p : [data] }
   catch { return [data] }
@@ -115,16 +115,15 @@ async function submitAnswer(chosenIdx, options, q) {
 
   const chosenText = options[chosenIdx]
 
-  // DB-triggeren (fn_verify_session_answer) set is_correct + points_earned server-side
-  const { data: saved, error } = await db.from('session_answers')
-    .insert({
-      player_id:       identity.playerId,
-      session_id:      identity.sessionId,
-      question_id:     q.id,
-      selected_option: chosenText
-    })
-    .select('is_correct, points_earned')
-    .single()
+  // Token-verifisert RPC. DB-triggeren (fn_verify_session_answer) set is_correct +
+  // points_earned server-side og blokkerer pausa/avslutta/forlatne sesjonar.
+  const { data: savedRows, error } = await db.rpc('submit_answer', {
+    p_player_id:       identity.playerId,
+    p_token:           identity.token,
+    p_question_id:     q.id,
+    p_selected_option: chosenText
+  })
+  const saved = Array.isArray(savedRows) ? savedRows[0] : savedRows
 
   if (error) {
     const msg = error.message || ''
