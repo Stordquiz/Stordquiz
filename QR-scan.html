@@ -191,8 +191,13 @@
     <!-- Identity chip (shows who is logged in to the hunt) -->
     <div id="identity-area"></div>
 
+    <!-- Fallback for insecure context (HTTP) -->
+    <div id="insecure-banner" style="display:none;width:100%;background:#1a1a0a;border:1px solid #5a5a00;border-radius:14px;padding:1rem 1.1rem;font-size:.88rem;color:#f0c050;text-align:center;">
+      ⚠️ Kamera krev HTTPS. Bruk <strong>telefon-kameraet</strong> ditt til å skanne QR-kodane direkte — svar opnar seg automatisk i nettlesaren.
+    </div>
+
     <!-- Scanner -->
-    <div class="scanner-card">
+    <div class="scanner-card" id="scanner-card">
       <div class="scanner-card-header">
         <div class="scanner-dot"></div>
         <span class="scanner-label"><strong>Kamera aktivt</strong> – finn ein QR-kode</span>
@@ -292,9 +297,9 @@
         return
       }
 
-      // Check already answered (via token-verifisert RPC — anon kan ikkje lese session_answers direkte)
+      // Check already answered
       const { data: myAnswers } = await db
-        .rpc('get_my_answers', { p_player_id: identity.playerId, p_token: identity.token })
+        .from('session_answers').select('question_id,is_correct').eq('player_id', identity.playerId).eq('session_id', identity.sessionId)
       const existing = (myAnswers || []).find(a => a.question_id === questionId) || null
 
       if (existing) {
@@ -335,8 +340,11 @@
       el.innerHTML = ''
     }
 
-    // Wait for DOM + scripts fully ready before starting scanner
-    if (typeof Html5QrcodeScanner === 'undefined') {
+    // Detect insecure context — camera API blocked on HTTP
+    if (!window.isSecureContext) {
+      document.getElementById('insecure-banner').style.display = 'block'
+      document.getElementById('scanner-card').style.display = 'none'
+    } else if (typeof Html5QrcodeScanner === 'undefined') {
       document.getElementById('qr-reader').innerHTML =
         '<p style="color:var(--red);padding:1rem;text-align:center;font-size:.9rem;">❌ Kunne ikkje laste QR-skanner. Sjekk internettforbindinga og last sida på nytt.</p>'
     } else {
