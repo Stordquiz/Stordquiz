@@ -5,7 +5,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 const params   = new URLSearchParams(location.search)
 const quizId   = params.get('id')
-const BASE_URL = `${location.origin}${location.pathname.replace('quiz.html','question.html')}`
+const BASE_URL = 'https://stordquiz.no/question.html'
 
 // Same fargepalett som dashboard – brukt for å finne ink (skriftfarge) til print
 const COLORS = [
