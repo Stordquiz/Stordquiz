@@ -133,19 +133,25 @@ async function init() {
 
 // ── COLOR GRID ──
 function buildColorGrid() {
-  const grid = document.getElementById('colorGrid')
+  renderColorGrid('colorGrid', COLORS[0].bg, c => { selectedColor = c })
+}
+
+// Teiknar ein fargevelgar i gitt element. Valet gjeld berre innanfor dette gridet.
+function renderColorGrid(gridId, selectedBg, onSelect) {
+  const grid = document.getElementById(gridId)
+  if (!grid) return
   grid.innerHTML = ''
-  COLORS.forEach((c, i) => {
+  COLORS.forEach(c => {
     const btn = document.createElement('button')
     btn.type = 'button'
-    btn.className = 'color-btn' + (i === 0 ? ' selected' : '')
+    btn.className = 'color-btn' + (c.bg === selectedBg ? ' selected' : '')
     btn.style.background = c.bg
     btn.title = c.name
     btn.setAttribute('aria-label', c.name)
     btn.onclick = () => {
-      document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('selected'))
+      grid.querySelectorAll('.color-btn').forEach(b => b.classList.remove('selected'))
       btn.classList.add('selected')
-      selectedColor = c
+      onSelect(c)
     }
     grid.appendChild(btn)
   })
@@ -257,6 +263,22 @@ function renderQuizzes(list) {
           </svg>
         </button>
         <div class="quiz-menu-pop" data-menu-for="${q.id}">
+          <button class="quiz-menu-item" data-action="rename" data-quiz-id="${q.id}">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+            Endre namn
+          </button>
+          <button class="quiz-menu-item" data-action="color" data-quiz-id="${q.id}">
+            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="9"/>
+              <circle cx="8.5" cy="10" r="1.2" fill="currentColor"/>
+              <circle cx="12" cy="7.5" r="1.2" fill="currentColor"/>
+              <circle cx="15.5" cy="10" r="1.2" fill="currentColor"/>
+            </svg>
+            Endre farge
+          </button>
           <button class="quiz-menu-item" data-action="category" data-quiz-id="${q.id}">
             <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
@@ -317,6 +339,18 @@ function renderQuizzes(list) {
         if (p !== menuPop) p.classList.remove('open')
       })
       menuPop.classList.toggle('open')
+    })
+
+    // namn- og farge-handling i meny
+    menuPop.querySelector('[data-action="rename"]').addEventListener('click', (e) => {
+      e.stopPropagation()
+      menuPop.classList.remove('open')
+      openEditModal(q.id, 'name')
+    })
+    menuPop.querySelector('[data-action="color"]').addEventListener('click', (e) => {
+      e.stopPropagation()
+      menuPop.classList.remove('open')
+      openEditModal(q.id, 'color')
     })
 
     // kategori-handling i meny
@@ -648,6 +682,70 @@ async function saveCategoryModal() {
   closeCategoryModal()
 }
 
+// ── ENDRE NAMN OG FARGE MODAL ──
+let editQuizId = null
+let editColor  = COLORS[0]
+
+function openEditModal(quizId, focus) {
+  const q = allQuizzes.find(x => x.id === quizId)
+  if (!q) return
+  editQuizId = quizId
+  editColor  = findColor(q.color || COLORS[0].bg)
+
+  const nameInput = document.getElementById('editName')
+  nameInput.value = q.name || ''
+  renderColorGrid('editColorGrid', editColor.bg, c => { editColor = c })
+
+  document.getElementById('editOverlay').classList.add('open')
+  if (focus === 'name') {
+    setTimeout(() => { nameInput.focus(); nameInput.select() }, 150)
+  }
+}
+
+function closeEditModal() {
+  document.getElementById('editOverlay').classList.remove('open')
+  editQuizId = null
+}
+function closeEditModalIfBg(e) {
+  if (e.target === document.getElementById('editOverlay')) closeEditModal()
+}
+
+async function saveEditModal() {
+  if (!editQuizId) return
+  const q = allQuizzes.find(x => x.id === editQuizId)
+  if (!q) return closeEditModal()
+
+  const nameInput = document.getElementById('editName')
+  const newName = nameInput.value.trim()
+  if (!newName) { nameInput.focus(); return }
+
+  const changes = {}
+  if (newName !== q.name) changes.name = newName
+  if (editColor.bg !== (q.color || COLORS[0].bg)) changes.color = editColor.bg
+  if (Object.keys(changes).length === 0) return closeEditModal()
+
+  const btn = document.getElementById('editSaveBtn')
+  btn.disabled = true
+  btn.textContent = 'Lagrar…'
+
+  // .select() gjer at vi oppdagar om databasen (RLS) stille avviste oppdateringa
+  const { data, error } = await db.from('quizzes').update(changes).eq('id', editQuizId).select('id')
+
+  btn.disabled = false
+  btn.textContent = 'Lagre'
+
+  if (error || !data || data.length === 0) {
+    console.error('saveEditModal:', error)
+    showToast('❌ Kunne ikkje lagre endringa' + (error ? ': ' + error.message : ''))
+    return
+  }
+
+  Object.assign(q, changes)
+  applyFilters()
+  closeEditModal()
+  showToast('✏️ Quiz oppdatert')
+}
+
 // ── SEARCH + TAG-FILTER ──
 function applyFilters() {
   const term = currentSearch.toLowerCase()
@@ -872,6 +970,12 @@ document.addEventListener('keydown', e => {
     closeDeleteModal()
     closeManageModal()
     closeCategoryModal()
+    closeEditModal()
+  }
+  if (e.key === 'Enter' && document.getElementById('editOverlay').classList.contains('open')) {
+    e.preventDefault()
+    saveEditModal()
+    return
   }
   if (e.key === 'Enter' && document.getElementById('modalOverlay').classList.contains('open')) {
     // Ikkje submit om brukaren skriv i ny-tag-feltet (då skal Enter lukka det)
@@ -904,5 +1008,8 @@ window.closeCategoryModalIfBg = closeCategoryModalIfBg
 window.onCatEditSelectChange  = onCatEditSelectChange
 window.cancelCatEditNew       = cancelCatEditNew
 window.saveCategoryModal      = saveCategoryModal
+window.closeEditModal         = closeEditModal
+window.closeEditModalIfBg     = closeEditModalIfBg
+window.saveEditModal          = saveEditModal
 
 init()

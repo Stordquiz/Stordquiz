@@ -204,6 +204,28 @@
     </div>
   </div>
 
+  <!-- ENDRE NAMN OG FARGE MODAL -->
+  <div class="modal-overlay" id="editOverlay" onclick="closeEditModalIfBg(event)">
+    <div class="modal">
+      <div class="modal-title">Endre quiz</div>
+      <div class="modal-desc">Gje quizen eit nytt namn eller vel ein annan farge.</div>
+      <div class="modal-form">
+        <div class="modal-field">
+          <label>Namn</label>
+          <input type="text" id="editName" placeholder="t.d. Norgesgeografi 6B" maxlength="60" />
+        </div>
+        <div class="modal-field">
+          <label>Farge</label>
+          <div class="color-grid" id="editColorGrid"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-cancel" onclick="closeEditModal()">Avbryt</button>
+          <button class="btn-submit" id="editSaveBtn" onclick="saveEditModal()">Lagre</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- TOAST -->
   <div class="toast" id="toast"></div>
 

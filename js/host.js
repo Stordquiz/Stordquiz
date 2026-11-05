@@ -99,7 +99,7 @@ function showLobby(quiz, pin) {
   document.getElementById('qname').textContent = quiz.name
   document.getElementById('qsub').textContent = `${totalQs} spørsmål`
   document.getElementById('pin-num').textContent = pin
-  const base = location.origin + location.pathname.replace('host.html', '')
+  const base = 'https://stordquiz.no/'
   document.getElementById('pin-url').textContent = base
   document.getElementById('join-strong').textContent = base
   renderLobbyPlayers()
